@@ -1,7 +1,7 @@
 
 pub trait Topology {
     fn neighbors(&self, i: usize, radius: f64) -> Vec<usize>;
-    fn radius<I: IntoIterator<Item=usize>>(&self, nodes: I) -> f64;
+    fn radius<I: IntoIterator<Item=usize>>(&self, center: usize, nodes: I) -> f64;
 }
 
 pub struct OneDimension {
@@ -24,10 +24,10 @@ impl Topology for OneDimension {
         ).collect()
     }
 
-    fn radius<I: IntoIterator<Item=usize>>(&self, nodes: I) -> f64 {
-        let (min, max) = nodes.into_iter().fold((self.length, 0), |(min, max), i| {
-            (if i < min { i } else { min }, if i > max { i } else { max })
-        });
-        (max - min) as f64 / 2.0
+    fn radius<I: IntoIterator<Item=usize>>(&self, center: usize, nodes: I) -> f64 {
+        nodes.into_iter()
+             .map(|i| if i > center { i - center } else { center -i })
+             .fold(0, |m, i| if i > m { i } else { m })
+             as f64
     }
 }

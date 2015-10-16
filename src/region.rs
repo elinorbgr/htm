@@ -152,8 +152,8 @@ impl<T: Topology> Region<T> {
         }
 
         // TODO: update inhibition_radius
-        self.inhibition_radius = self.columns.iter().map(|c| {
-            self.topology.radius(c.inputs.synapses.iter().map(|s| s.source))
+        self.inhibition_radius = self.columns.iter().enumerate().map(|(i, c)| {
+            self.topology.radius(i, c.inputs.synapses.iter().map(|s| s.source))
         }).fold(0., ::std::ops::Add::add) / (self.columns.len() as f64);
     }
 }
