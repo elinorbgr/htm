@@ -4,8 +4,7 @@ use itertools::Itertools;
 
 use rand::Rng;
 
-use CorticalLearning;
-use topology::Topology;
+use Pooling;
 
 struct Synapse {
     source: usize,
@@ -131,73 +130,54 @@ impl Cell {
 
 struct Column {
     cells: Vec<Cell>,
-    inputs: Segment,
-    boost: f64,
-    active_duty_cycle: f64,
-    overlap_duty_cycle: f64,
 }
 
 impl Column {
-    fn new<R: Rng>(depth: usize, segment_count: usize, proximal_segment_size: usize, distal_segment_size: usize, inputs: Range<usize>, sources: Range<usize>, mean: f64, dev: f64, rng: &mut R) -> Column {
+    fn new<R: Rng>(depth: usize, segment_count: usize, distal_segment_size: usize, sources: Range<usize>, mean: f64, dev: f64, rng: &mut R) -> Column {
         Column {
             cells: (0..depth).map(|_| Cell::new(segment_count, distal_segment_size, sources.clone(), mean, dev, rng)).collect(),
-            inputs: Segment::new(proximal_segment_size, inputs, mean, dev, rng),
-            boost: 1.0,
-            active_duty_cycle: 0.0,
-            overlap_duty_cycle: 0.0
         }
     }
 }
 
-pub struct RegionConfig {
-    input_size: usize,
+pub struct TemporalPoolerConfig {
     initial_perm: f64,
     connected_perm: f64,
     permanence_inc: f64,
     permanence_dec: f64,
-    sliding_average_factor: f64,
-    min_overlap: usize,
-    desired_local_activity: usize,
     activation_thresold: usize,
     learning_thresold: usize,
     new_synapses: usize,
     initial_dev: f64,
     initial_segment_count: usize,
-    initial_proximal_segment_size: usize,
     initial_distal_segment_size: usize
 }
 
-pub struct Region<T: Topology> {
+pub struct TemporalPooler {
     columns: Vec<Column>,
-    topology: T,
     depth: usize,
-    config: RegionConfig,
-    inhibition_radius: f64
+    config: TemporalPoolerConfig,
 }
 
 /*
  * Preparation
  */
 
-impl<T: Topology> Region<T> {
-    pub fn new(columns: usize, depth: usize, topology: T, config: RegionConfig) -> Region<T> {
+impl TemporalPooler {
+    pub fn new(columns: usize, depth: usize, config: TemporalPoolerConfig) -> TemporalPooler {
         let mut rng = ::rand::thread_rng();
-        Region {
+        TemporalPooler {
             columns: (0..columns).map(|_|
                 Column::new(depth,
                             config.initial_segment_count,
-                            config.initial_proximal_segment_size,
                             config.initial_distal_segment_size,
-                            0..config.input_size,
                             0..(depth*columns),
                             config.connected_perm,
                             config.initial_dev,
                             &mut rng)
                 ).collect(),
-            topology: topology,
             depth: depth,
             config: config,
-            inhibition_radius: 1.0
         }
     }
 }
@@ -205,29 +185,8 @@ impl<T: Topology> Region<T> {
 /*
  * Cortical Learning impl
  */
-impl<T: Topology> CorticalLearning for Region<T> {
-    fn spatial_pool(&self, inputs: &[bool]) -> Vec<bool> {
-        assert!(inputs.len() == self.config.input_size,
-            "Number of inputs provided did not match number of inputs of the region.");
-        // phase 1: Overlaps
-        let overlaps = self.cortical_spatial_phase_1(inputs);
-        // phase 2: Inhibition
-        self.cortical_spatial_phase_2(&overlaps)
-    }
-
-    fn spatial_pool_train(&mut self, inputs: &[bool]) -> Vec<bool> {
-        assert!(inputs.len() == self.config.input_size,
-            "Number of inputs provided did not match number of inputs of the region.");
-        // phase 1: Overlaps
-        let overlaps = self.cortical_spatial_phase_1(inputs);
-        // phase 2: Inhibition
-        let actives = self.cortical_spatial_phase_2(&overlaps);
-        // phase 3: Learning
-        self.cortical_spatial_phase_3(inputs, &overlaps, &actives);
-        actives
-    }
-
-    fn temporal_pool(&mut self, active_cols: &[bool]) -> Vec<bool> {
+impl Pooling for TemporalPooler {
+    fn pool(&mut self, active_cols: &[bool]) -> Vec<bool> {
         let active_cells = self.dump_active_cells_and_reset();
         self.cortical_temporal_phase_1(active_cols, &active_cells);
         self.cortical_temporal_phase_2(&active_cells);
@@ -236,7 +195,7 @@ impl<T: Topology> CorticalLearning for Region<T> {
         }).collect()
     }
 
-    fn temporal_pool_train(&mut self, active_cols: &[bool]) -> Vec<bool> {
+    fn pool_train(&mut self, active_cols: &[bool]) -> Vec<bool> {
         let active_cells = self.dump_active_cells_and_reset();
         let predictive_cells = self.dump_predictive_cells_and_reset();
         let learning_cells = self.dump_learning_cells_and_reset();
@@ -251,79 +210,10 @@ impl<T: Topology> CorticalLearning for Region<T> {
 }
 
 /*
- * Spatial Pooling
- */
-
-impl<T: Topology> Region<T> {
-    fn cortical_spatial_phase_1(&self, inputs: &[bool]) -> Vec<f64> {
-        self.columns.iter().map( |c| {
-            let o = c.inputs.synapses.iter().map(|s|
-                if s.permanence >= self.config.connected_perm { inputs[s.source] } else { false } as usize
-            ).fold(0, ::std::ops::Add::add);
-            if o >= self.config.min_overlap { o as f64 * c.boost } else { 0.0 }
-        }).collect()
-    }
-
-    fn cortical_spatial_phase_2(&self, overlaps: &[f64]) -> Vec<bool> {
-        overlaps.iter().enumerate().map( |(i, o)| {
-            let mut acts = self.topology.neighbors(i, self.inhibition_radius)
-                                        .into_iter()
-                                        .map(|j| overlaps[j]).collect::<Vec<_>>();
-            acts.sort_by(|a,b| ::std::cmp::PartialOrd::partial_cmp(b,a).unwrap_or(::std::cmp::Ordering::Less));
-            acts.get(self.config.desired_local_activity - 1)
-                .map(|a| { *o > 0.0 && *o > *a }).unwrap_or(false)
-        }).collect()
-    }
-
-    fn cortical_spatial_phase_3(&mut self, inputs: &[bool], overlaps: &[f64], actives: &[bool]) {
-        for c in self.columns.iter_mut() {
-            for s in &mut c.inputs.synapses {
-                if inputs[s.source] {
-                    s.permanence += self.config.permanence_inc;
-                    if s.permanence > 1.0 { s.permanence = 1.0 }
-                } else {
-                    s.permanence -= self.config.permanence_dec;
-                    if s.permanence < 0.0 { s.permanence = 0.0 }
-                }
-            }
-        }
-
-        let min_duty_cycles = (0..self.columns.len()).map(|i| {
-            self.topology.neighbors(i, self.inhibition_radius)
-                         .into_iter()
-                         .map(|j| self.columns[j].active_duty_cycle)
-                         .fold(0.0, |a, b| if a > b { a } else { b })
-             * 0.01
-        }).collect::<Vec<_>>();
-
-        let alpha = self.config.sliding_average_factor;
-        for (((c, min_duty_cycle), overlap), active) in self.columns.iter_mut().zip(min_duty_cycles.into_iter()).zip(overlaps.iter()).zip(actives.iter()) {
-            c.active_duty_cycle *= (1.0 - alpha) * c.active_duty_cycle;
-            if *active { c.active_duty_cycle += alpha }
-            c.boost = if c.active_duty_cycle >= min_duty_cycle { 1.0 } else { min_duty_cycle / c.active_duty_cycle };
-
-            c.overlap_duty_cycle *= (1.0 - alpha) * c.overlap_duty_cycle;
-            if *overlap >= self.config.connected_perm { c.overlap_duty_cycle += alpha }
-            if c.overlap_duty_cycle < min_duty_cycle {
-                let factor = 1.0 + 0.1 * self.config.connected_perm;
-                for s in &mut c.inputs.synapses {
-                    s.permanence *= factor;
-                    if s.permanence > 1.0 { s.permanence = 1.0 }
-                }
-            }
-        }
-
-        self.inhibition_radius = self.columns.iter().enumerate().map(|(i, c)| {
-            self.topology.radius(i, c.inputs.synapses.iter().map(|s| s.source))
-        }).fold(0., ::std::ops::Add::add) / (self.columns.len() as f64);
-    }
-}
-
-/*
  * Temporal Pooling
  */
 
-impl<T: Topology> Region<T> {
+impl TemporalPooler {
     fn dump_active_cells_and_reset(&mut self) -> Vec<bool> {
         self.columns.iter_mut().flat_map(|c| c.cells.iter_mut()).map(|c| { let a = c.active; c.active = false; a }).collect()
     }
