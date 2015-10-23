@@ -1,6 +1,9 @@
+use std::ops::Range;
+
 
 pub trait Topology {
-    fn neighbors(&self, i: usize, radius: f64) -> Vec<usize>;
+    type NeighborsIter: Iterator<Item=usize>;
+    fn neighbors(&self, i: usize, radius: f64) -> Self::NeighborsIter;
     fn radius<I: IntoIterator<Item=usize>>(&self, center: usize, nodes: I) -> f64;
 }
 
@@ -15,13 +18,14 @@ impl OneDimension {
 }
 
 impl Topology for OneDimension {
-    fn neighbors(&self, i: usize, radius: f64) -> Vec<usize> {
+    type NeighborsIter = Range<usize>;
+    fn neighbors(&self, i: usize, radius: f64) -> Range<usize> {
         let radius = radius.floor() as usize;
         (
          (if i > radius { i - radius } else { 0 })
          ..
          (if i > (self.length - radius) { self.length } else { i + radius })
-        ).collect()
+        )
     }
 
     fn radius<I: IntoIterator<Item=usize>>(&self, center: usize, nodes: I) -> f64 {

@@ -124,13 +124,10 @@ impl<T: Topology> SpatialPooler<T> {
     }
 
     fn cortical_spatial_phase_2(&self, overlaps: &[f64]) -> Vec<bool> {
-        overlaps.iter().enumerate().map( |(i, o)| {
-            let mut acts = self.topology.neighbors(i, self.inhibition_radius)
-                                        .into_iter()
-                                        .map(|j| overlaps[j]).collect::<Vec<_>>();
-            acts.sort_by(|a,b| ::std::cmp::PartialOrd::partial_cmp(b,a).unwrap_or(::std::cmp::Ordering::Less));
-            acts.get(self.config.desired_local_activity - 1)
-                .map(|a| { *o >= 0.0 && *o >= *a }).unwrap_or(true)
+        overlaps.iter().enumerate().map( |(i, &o)| {
+            let rank = self.topology.neighbors(i, self.inhibition_radius)
+                                        .map(|j| (overlaps[j] > o) as usize).fold(0, ::std::ops::Add::add);
+            rank < self.config.desired_local_activity
         }).collect()
     }
 
@@ -149,7 +146,6 @@ impl<T: Topology> SpatialPooler<T> {
 
         let min_duty_cycles = (0..self.columns.len()).map(|i| {
             self.topology.neighbors(i, self.inhibition_radius)
-                         .into_iter()
                          .map(|j| self.columns[j].active_duty_cycle)
                          .fold(0.0, |a, b| if a > b { a } else { b })
              * 0.01
