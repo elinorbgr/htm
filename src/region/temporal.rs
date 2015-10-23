@@ -141,22 +141,23 @@ impl Column {
 }
 
 pub struct TemporalPoolerConfig {
-    initial_perm: f64,
-    connected_perm: f64,
-    permanence_inc: f64,
-    permanence_dec: f64,
-    activation_thresold: usize,
-    learning_thresold: usize,
-    new_synapses: usize,
-    initial_dev: f64,
-    initial_segment_count: usize,
-    initial_distal_segment_size: usize
+    pub initial_perm: f64,
+    pub connected_perm: f64,
+    pub permanence_inc: f64,
+    pub permanence_dec: f64,
+    pub activation_thresold: usize,
+    pub learning_thresold: usize,
+    pub new_synapses: usize,
+    pub initial_dev: f64,
+    pub initial_segment_count: usize,
+    pub initial_distal_segment_size: usize
 }
 
 pub struct TemporalPooler {
     columns: Vec<Column>,
     depth: usize,
     config: TemporalPoolerConfig,
+    last_anomaly: f64,
 }
 
 /*
@@ -165,7 +166,7 @@ pub struct TemporalPooler {
 
 impl TemporalPooler {
     pub fn new(columns: usize, depth: usize, config: TemporalPoolerConfig) -> TemporalPooler {
-        let mut rng = ::rand::thread_rng();
+        let mut rng = ::rand::weak_rng();
         TemporalPooler {
             columns: (0..columns).map(|_|
                 Column::new(depth,
@@ -178,6 +179,7 @@ impl TemporalPooler {
                 ).collect(),
             depth: depth,
             config: config,
+            last_anomaly: 1.0
         }
     }
 }
@@ -188,8 +190,10 @@ impl TemporalPooler {
 impl Pooling for TemporalPooler {
     fn pool(&mut self, active_cols: &[bool]) -> Vec<bool> {
         let active_cells = self.dump_active_cells_and_reset();
-        self.cortical_temporal_phase_1(active_cols, &active_cells);
-        self.cortical_temporal_phase_2(&active_cells);
+        let predictive_cells = self.dump_predictive_cells_and_reset();
+        self.cortical_temporal_phase_1(active_cols, &active_cells, &predictive_cells);
+        self.cortical_temporal_phase_2();
+        self.update_anomaly(&predictive_cells);
         self.columns.iter().map(|col| {
             col.cells.iter().any(|cell| cell.active || cell.predictive)
         }).collect()
@@ -199,13 +203,18 @@ impl Pooling for TemporalPooler {
         let active_cells = self.dump_active_cells_and_reset();
         let predictive_cells = self.dump_predictive_cells_and_reset();
         let learning_cells = self.dump_learning_cells_and_reset();
-        let mut rng = ::rand::thread_rng();
-        self.cortical_temporal_phase_learning_1(active_cols, &active_cells, &learning_cells, &mut rng);
-        self.cortical_temporal_phase_learning_2(&active_cells, &learning_cells, &mut rng);
+        let mut rng = ::rand::weak_rng();
+        self.cortical_temporal_phase_learning_1(active_cols, &active_cells, &learning_cells, &predictive_cells, &mut rng);
+        self.cortical_temporal_phase_learning_2(&learning_cells, &mut rng);
         self.cortical_temporal_phase_learning_3(&predictive_cells);
+        self.update_anomaly(&predictive_cells);
         self.columns.iter().map(|col| {
             col.cells.iter().any(|cell| cell.active || cell.predictive)
         }).collect()
+    }
+
+    fn anomaly(&self) -> f64 {
+        self.last_anomaly
     }
 }
 
@@ -218,6 +227,10 @@ impl TemporalPooler {
         self.columns.iter_mut().flat_map(|c| c.cells.iter_mut()).map(|c| { let a = c.active; c.active = false; a }).collect()
     }
 
+    fn dump_active_cells(&mut self) -> Vec<bool> {
+        self.columns.iter_mut().flat_map(|c| c.cells.iter_mut()).map(|c| c.active).collect()
+    }
+
     fn dump_predictive_cells_and_reset(&mut self) -> Vec<bool> {
         self.columns.iter_mut().flat_map(|c| c.cells.iter_mut()).map(|c| { let l = c.predictive; c.predictive = false; l }).collect()
     }
@@ -226,13 +239,13 @@ impl TemporalPooler {
         self.columns.iter_mut().flat_map(|c| c.cells.iter_mut()).map(|c| { let l = c.learning; c.learning = false; l }).collect()
     }
 
-    fn cortical_temporal_phase_1(&mut self, active_cols: &[bool], active_cells: &[bool]) {
+    fn cortical_temporal_phase_1(&mut self, active_cols: &[bool], active_cells: &[bool], predictive_cells: &[bool]) {
         let connected_perm = self.config.connected_perm;
         let activation_thresold = self.config.activation_thresold;
-        for col in self.columns.iter_mut().zip(active_cols.iter()).filter_map(|(c, a)| if *a { Some(c) } else { None }) {
+        for (coli, col) in self.columns.iter_mut().enumerate().zip(active_cols.iter()).filter_map(|(c, a)| if *a { Some(c) } else { None }) {
             let mut predicted = false;
-            for cell in col.cells.iter_mut() {
-                if !cell.predictive { continue; }
+            for (celli, cell) in col.cells.iter_mut().enumerate() {
+                if !predictive_cells[coli*self.depth + celli] { continue; }
                 if !cell.segments.iter()
                                  .any(|s|
                                     s.sequence &&
@@ -251,16 +264,16 @@ impl TemporalPooler {
         }
     }
 
-    fn cortical_temporal_phase_learning_1<R: Rng>(&mut self, active_cols: &[bool], active_cells: &[bool], learning_cells: &[bool], rng: &mut R) {
+    fn cortical_temporal_phase_learning_1<R: Rng>(&mut self, active_cols: &[bool], active_cells: &[bool], learning_cells: &[bool], predictive_cells: &[bool], rng: &mut R) {
         let connected_perm = self.config.connected_perm;
         let activation_thresold = self.config.activation_thresold;
         let learning_thresold = self.config.learning_thresold;
         let new_synapses = self.config.new_synapses;
-        for col in self.columns.iter_mut().zip(active_cols.iter()).filter_map(|(c, a)| if *a { Some(c) } else { None }) {
+        for (coli, col) in self.columns.iter_mut().enumerate().zip(active_cols.iter()).filter_map(|(c, a)| if *a { Some(c) } else { None }) {
             let mut predicted = false;
             let mut chosen = false;
-            for cell in col.cells.iter_mut() {
-                if !cell.predictive { continue; }
+            for (celli, cell) in col.cells.iter_mut().enumerate() {
+                if !predictive_cells[coli*self.depth + celli] { continue; }
                 if let Some((i, _)) = {
                     let mut v = cell.segments.iter().enumerate()
                                  .map(|(i, s)| (i, s.activity(active_cells, connected_perm), s.sequence))
@@ -294,8 +307,8 @@ impl TemporalPooler {
                   .map(|(i, _, c)| (Some(i), c))
                   .unwrap_or_else(|| {
                     col.cells.iter().map(|c| c.segments.len()).enumerate()
-                        .fold1(|(l1, c1), (l2, c2)| if l1 < l2 { (l1, c1) } else { (l2, c2) } )
-                        .map(|(_, c)| (None, c))
+                        .fold1(|(c1, l1), (c2, l2)| if l1 < l2 { (c1, l1) } else { (c2, l2) } )
+                        .map(|(c, _)| (None, c))
                         .unwrap()
                 });
                 col.cells[cindex].learning = true;
@@ -304,38 +317,40 @@ impl TemporalPooler {
         }
     }
 
-    fn cortical_temporal_phase_2(&mut self, active_cells: &[bool]) {
+    fn cortical_temporal_phase_2(&mut self) {
         let connected_perm = self.config.connected_perm;
         let activation_thresold = self.config.activation_thresold;
+        let active_cells = self.dump_active_cells();
         for col in self.columns.iter_mut() {
         for cell in col.cells.iter_mut() {
         for s in cell.segments.iter() {
-            if s.active(active_cells, connected_perm, activation_thresold) {
+            if s.active(&active_cells, connected_perm, activation_thresold) {
                 cell.predictive = true;
             }
         }}}
     }
 
-    fn cortical_temporal_phase_learning_2<R: Rng>(&mut self, active_cells: &[bool], training_cells: &[bool], rng: &mut R) {
+    fn cortical_temporal_phase_learning_2<R: Rng>(&mut self, training_cells: &[bool], rng: &mut R) {
         let connected_perm = self.config.connected_perm;
         let activation_thresold = self.config.activation_thresold;
         let new_synapses = self.config.new_synapses;
         let learning_thresold = self.config.learning_thresold;
+        let active_cells = self.dump_active_cells();
         for col in self.columns.iter_mut() {
         for cell in col.cells.iter_mut() {
         let active_segments = cell.segments.iter().enumerate()
-                                   .filter_map(|(si, s)| if s.active(active_cells, connected_perm, activation_thresold) { Some(si) } else { None })
+                                   .filter_map(|(si, s)| if s.active(&active_cells, connected_perm, activation_thresold) { Some(si) } else { None })
                                    .collect::<Vec<_>>();
         for si in active_segments {
                 cell.predictive = true;
-                cell.add_update(Some(si), active_cells, &[], connected_perm, 0, false, rng);
+                cell.add_update(Some(si), &active_cells, training_cells, connected_perm, 0, false, rng);
 
-                let opt = cell.segments.iter().map(|s| s.raw_activity(active_cells))
+                let opt = cell.segments.iter().map(|s| s.raw_activity(&active_cells))
                                      .enumerate()
                                      .filter(|&(_, a)| a >= learning_thresold)
                                      .fold1(|(i1, a1), (i2, a2)| if a1 > a2 { (i1, a1) } else { (i2, a2) })
                                      .map(|(i, _)| i);
-                cell.add_update(opt, active_cells, training_cells, connected_perm, new_synapses, false, rng);
+                cell.add_update(opt, &active_cells, training_cells, connected_perm, new_synapses, false, rng);
         }}}
     }
 
@@ -343,14 +358,105 @@ impl TemporalPooler {
         let inc = self.config.permanence_inc;
         let dec = self.config.permanence_dec;
         let init = self.config.initial_perm;
-        for (coli, col) in self.columns.iter_mut().enumerate() {
-        for (celli, cell) in col.cells.iter_mut().enumerate() {
+        for (cell, pred) in self.columns.iter_mut().flat_map(|c| c.cells.iter_mut()).zip(predictive_cells.iter()) {
             if cell.learning {
                 cell.process_updates(true, inc, dec, init)
-            } else if (!cell.predictive) && predictive_cells[coli * self.depth + celli]{
+            } else if (!cell.predictive) && *pred {
                 cell.process_updates(false, inc, dec, init)
             }
             cell.update_list.clear();
-        }}
+        }
+    }
+
+    fn update_anomaly(&mut self, previous_predictive_cells: &[bool]) {
+        let (tot_act, tot_act_pred) = self.columns.iter().map(|col| col.cells.iter().any(|c| c.active)).zip(
+                previous_predictive_cells.iter().chunks_lazy(self.depth).into_iter().map(|mut col| col.any(|x| *x))
+            ).fold((0usize, 0usize), |(ta, tap), (a, p)| (ta + a as usize, tap + (a ^ (a&p)) as usize));
+        self.last_anomaly = tot_act_pred as f64 / tot_act as f64
+    }
+
+    pub fn debug(&self) {
+        let (synapses, segments) = self.columns.iter().flat_map(|c| c.cells.iter()).map(|c| {
+            (c.segments.iter().map(|s| s.synapses.len()).fold(0, ::std::ops::Add::add), c.segments.len())
+        }).fold((0, 0), |(a,b),(x,y)| (a+x, b+y));
+        println!("synapses: {}, segments: {}", synapses, segments);
+    }
+
+    pub fn string_output(&self) -> String {
+        self.columns.iter().map(|c| {
+            if c.cells.iter().any(|cell| cell.active) {
+                '+'
+            } else if c.cells.iter().any(|cell| cell.predictive) {
+                '-'
+            } else {
+                ' '
+            }
+        }).join("")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use test::Bencher;
+    use super::{TemporalPoolerConfig, TemporalPooler};
+    use Pooling;
+
+    static COL_COUNT: usize = 512;
+    static DEPTH: usize = 9;
+
+    #[bench]
+    fn bench_pool(b: &mut Bencher) {
+        let input = (0..8).map(|_|
+            (0..COL_COUNT).map(|_| ::rand::random::<bool>()).collect::<Vec<_>>()
+        ).collect::<Vec<_>>();
+
+        let mut pooler = TemporalPooler::new(
+            COL_COUNT,
+            DEPTH,
+            TemporalPoolerConfig {
+                initial_perm: 0.21,
+                connected_perm: 0.2,
+                permanence_inc: 0.1,
+                permanence_dec: 0.1,
+                activation_thresold: 13,
+                learning_thresold: 10,
+                new_synapses: 20,
+                initial_dev: 0.2,
+                initial_segment_count: 4,
+                initial_distal_segment_size: 20
+            }
+        );
+
+        let mut i = 0;
+
+        b.bench_n(3, |b| b.iter(|| { pooler.pool(&input[i]); i = (i+1) % 8; }));
+    }
+
+    #[bench]
+    fn bench_train(b: &mut Bencher) {
+        let input = (0..8).map(|_|
+            (0..COL_COUNT).map(|_| ::rand::random::<bool>()).collect::<Vec<_>>()
+        ).collect::<Vec<_>>();
+
+        let mut pooler = TemporalPooler::new(
+            COL_COUNT,
+            DEPTH,
+            TemporalPoolerConfig {
+                initial_perm: 0.21,
+                connected_perm: 0.2,
+                permanence_inc: 0.1,
+                permanence_dec: 0.1,
+                activation_thresold: 13,
+                learning_thresold: 10,
+                new_synapses: 20,
+                initial_dev: 0.2,
+                initial_segment_count: 4,
+                initial_distal_segment_size: 20
+            }
+        );
+
+        let mut i = 0;
+
+        b.bench_n(3, |b| b.iter(|| { pooler.pool_train(&input[i]); i = (i+1) % 8; }));
     }
 }

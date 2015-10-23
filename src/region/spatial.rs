@@ -41,15 +41,15 @@ impl Column {
 }
 
 pub struct SpatialPoolerConfig {
-    input_size: usize,
-    connected_perm: f64,
-    permanence_inc: f64,
-    permanence_dec: f64,
-    sliding_average_factor: f64,
-    min_overlap: usize,
-    desired_local_activity: usize,
-    initial_dev: f64,
-    initial_proximal_segment_size: usize,
+    pub input_size: usize,
+    pub connected_perm: f64,
+    pub permanence_inc: f64,
+    pub permanence_dec: f64,
+    pub sliding_average_factor: f64,
+    pub min_overlap: usize,
+    pub desired_local_activity: usize,
+    pub initial_dev: f64,
+    pub initial_proximal_segment_size: usize,
 }
 
 pub struct SpatialPooler<T: Topology> {
@@ -65,7 +65,7 @@ pub struct SpatialPooler<T: Topology> {
 
 impl<T: Topology> SpatialPooler<T> {
     pub fn new(columns: usize, topology: T, config: SpatialPoolerConfig) -> SpatialPooler<T> {
-        let mut rng = ::rand::thread_rng();
+        let mut rng = ::rand::weak_rng();
         SpatialPooler {
             columns: (0..columns).map(|_|
                 Column::new(config.initial_proximal_segment_size,
@@ -105,6 +105,8 @@ impl<T: Topology> Pooling for SpatialPooler<T> {
         self.cortical_spatial_phase_3(inputs, &overlaps, &actives);
         actives
     }
+
+    fn anomaly(&self) -> f64 { 0.0 }
 }
 
 /*
@@ -115,7 +117,7 @@ impl<T: Topology> SpatialPooler<T> {
     fn cortical_spatial_phase_1(&self, inputs: &[bool]) -> Vec<f64> {
         self.columns.iter().map( |c| {
             let o = c.inputs.iter().map(|s|
-                if s.permanence >= self.config.connected_perm { inputs[s.source] } else { false } as usize
+                if s.permanence >= self.config.connected_perm { inputs[s.source] as usize } else { 0 }
             ).fold(0, ::std::ops::Add::add);
             if o >= self.config.min_overlap { o as f64 * c.boost } else { 0.0 }
         }).collect()
@@ -128,12 +130,12 @@ impl<T: Topology> SpatialPooler<T> {
                                         .map(|j| overlaps[j]).collect::<Vec<_>>();
             acts.sort_by(|a,b| ::std::cmp::PartialOrd::partial_cmp(b,a).unwrap_or(::std::cmp::Ordering::Less));
             acts.get(self.config.desired_local_activity - 1)
-                .map(|a| { *o > 0.0 && *o > *a }).unwrap_or(false)
+                .map(|a| { *o >= 0.0 && *o >= *a }).unwrap_or(true)
         }).collect()
     }
 
     fn cortical_spatial_phase_3(&mut self, inputs: &[bool], overlaps: &[f64], actives: &[bool]) {
-        for c in self.columns.iter_mut() {
+        for c in self.columns.iter_mut().zip(actives.iter()).filter_map(|(c, &a)| if a { Some(c) } else { None }) {
             for s in &mut c.inputs {
                 if inputs[s.source] {
                     s.permanence += self.config.permanence_inc;
@@ -173,5 +175,70 @@ impl<T: Topology> SpatialPooler<T> {
         self.inhibition_radius = self.columns.iter().enumerate().map(|(i, c)| {
             self.topology.radius(i, c.inputs.iter().map(|s| s.source))
         }).fold(0., ::std::ops::Add::add) / (self.columns.len() as f64);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use test::Bencher;
+    use super::{SpatialPoolerConfig, SpatialPooler};
+    use topology::OneDimension;
+    use Pooling;
+
+    static INPUT_SIZE: usize = 512;
+    static COL_COUNT: usize = 512;
+
+    #[bench]
+    fn bench_pool(b: &mut Bencher) {
+        let input = (0..8).map(|_|
+            (0..INPUT_SIZE).map(|_| ::rand::random::<bool>()).collect::<Vec<_>>()
+        ).collect::<Vec<_>>();
+
+        let mut pooler = SpatialPooler::new(
+            COL_COUNT,
+            OneDimension::new(COL_COUNT),
+            SpatialPoolerConfig {
+                input_size: INPUT_SIZE,
+                connected_perm: 0.2,
+                permanence_inc: 0.003,
+                permanence_dec: 0.0005,
+                sliding_average_factor: 0.01,
+                min_overlap: 1,
+                desired_local_activity: 40,
+                initial_dev: 0.1,
+                initial_proximal_segment_size: 16,
+            }
+        );
+
+        let mut i = 0;
+
+        b.bench_n(3, |b| b.iter(|| { pooler.pool(&input[i]); i = (i+1) % 8; }));
+    }
+
+    #[bench]
+    fn bench_train(b: &mut Bencher) {
+        let input = (0..8).map(|_|
+            (0..INPUT_SIZE).map(|_| ::rand::random::<bool>()).collect::<Vec<_>>()
+        ).collect::<Vec<_>>();
+
+        let mut pooler = SpatialPooler::new(
+            COL_COUNT,
+            OneDimension::new(COL_COUNT),
+            SpatialPoolerConfig {
+                input_size: INPUT_SIZE,
+                connected_perm: 0.2,
+                permanence_inc: 0.003,
+                permanence_dec: 0.0005,
+                sliding_average_factor: 0.01,
+                min_overlap: 1,
+                desired_local_activity: 40,
+                initial_dev: 0.1,
+                initial_proximal_segment_size: 16,
+            }
+        );
+
+        let mut i = 0;
+
+        b.bench_n(3, |b| b.iter(|| { pooler.pool_train(&input[i]); i = (i+1) % 8; }));
     }
 }
