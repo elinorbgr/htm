@@ -190,19 +190,24 @@ impl TemporalPooler {
 /*
  * Cortical Learning impl
  */
+
 impl Pooling for TemporalPooler {
-    fn pool(&mut self, active_cols: &[bool]) -> Vec<bool> {
+    fn pool(&mut self, active_cols: &[usize]) -> Vec<usize> {
         let active_cells = self.dump_active_cells_and_reset();
         let predictive_cells = self.dump_predictive_cells_and_reset();
         self.cortical_temporal_phase_1(active_cols, &active_cells, &predictive_cells);
         self.cortical_temporal_phase_2();
         self.update_anomaly(&predictive_cells);
-        self.columns.iter().map(|col| {
-            col.cells.iter().any(|cell| cell.active || cell.predictive)
+        self.columns.iter().enumerate().filter_map(|(i, col)| {
+            if col.cells.iter().any(|cell| cell.active || cell.predictive) {
+                Some(i)
+            } else {
+                None
+            }
         }).collect()
     }
 
-    fn pool_train(&mut self, active_cols: &[bool]) -> Vec<bool> {
+    fn pool_train(&mut self, active_cols: &[usize]) -> Vec<usize> {
         let active_cells = self.dump_active_cells_and_reset();
         let predictive_cells = self.dump_predictive_cells_and_reset();
         let learning_cells = self.dump_learning_cells_and_reset();
@@ -211,8 +216,12 @@ impl Pooling for TemporalPooler {
         self.cortical_temporal_phase_learning_2(&learning_cells, &mut rng);
         self.cortical_temporal_phase_learning_3(&predictive_cells);
         self.update_anomaly(&predictive_cells);
-        self.columns.iter().map(|col| {
-            col.cells.iter().any(|cell| cell.active || cell.predictive)
+        self.columns.iter().enumerate().filter_map(|(i, col)| {
+            if col.cells.iter().any(|cell| cell.active || cell.predictive) {
+                Some(i)
+            } else {
+                None
+            }
         }).collect()
     }
 
@@ -242,10 +251,11 @@ impl TemporalPooler {
         self.columns.iter_mut().flat_map(|c| c.cells.iter_mut()).map(|c| { let l = c.learning; c.learning = false; l }).collect()
     }
 
-    fn cortical_temporal_phase_1(&mut self, active_cols: &[bool], active_cells: &[bool], predictive_cells: &[bool]) {
+    fn cortical_temporal_phase_1(&mut self, active_cols: &[usize], active_cells: &[bool], predictive_cells: &[bool]) {
         let connected_perm = self.config.connected_perm;
         let activation_thresold = self.config.activation_thresold;
-        for (coli, col) in self.columns.iter_mut().enumerate().zip(active_cols.iter()).filter_map(|(c, a)| if *a { Some(c) } else { None }) {
+        for &coli in active_cols {
+            let col = &mut self.columns[coli];
             let mut predicted = false;
             for (celli, cell) in col.cells.iter_mut().enumerate() {
                 if !predictive_cells[coli*self.depth + celli] { continue; }
@@ -265,14 +275,16 @@ impl TemporalPooler {
                 cell.active = true;
             }
         }
+
     }
 
-    fn cortical_temporal_phase_learning_1<R: Rng>(&mut self, active_cols: &[bool], active_cells: &[bool], learning_cells: &[bool], predictive_cells: &[bool], rng: &mut R) {
+    fn cortical_temporal_phase_learning_1<R: Rng>(&mut self, active_cols: &[usize], active_cells: &[bool], learning_cells: &[bool], predictive_cells: &[bool], rng: &mut R) {
         let connected_perm = self.config.connected_perm;
         let activation_thresold = self.config.activation_thresold;
         let learning_thresold = self.config.learning_thresold;
         let new_synapses = self.config.new_synapses;
-        for (coli, col) in self.columns.iter_mut().enumerate().zip(active_cols.iter()).filter_map(|(c, a)| if *a { Some(c) } else { None }) {
+        for &coli in active_cols {
+            let col = &mut self.columns[coli];
             let mut predicted = false;
             let mut chosen = false;
             for (celli, cell) in col.cells.iter_mut().enumerate() {
@@ -404,13 +416,14 @@ mod tests {
     use super::{TemporalPoolerConfig, TemporalPooler};
     use Pooling;
 
-    static COL_COUNT: usize = 512;
-    static DEPTH: usize = 9;
+    static COL_COUNT: usize = 2048;
+    static DEPTH: usize = 32;
 
     #[bench]
     fn bench_pool(b: &mut Bencher) {
+        let mut rng = ::rand::weak_rng();
         let input = (0..8).map(|_|
-            (0..COL_COUNT).map(|_| ::rand::random::<bool>()).collect::<Vec<_>>()
+            ::rand::sample(&mut rng, 0..COL_COUNT, COL_COUNT/50)
         ).collect::<Vec<_>>();
 
         let mut pooler = TemporalPooler::new(
@@ -437,8 +450,9 @@ mod tests {
 
     #[bench]
     fn bench_train(b: &mut Bencher) {
+        let mut rng = ::rand::weak_rng();
         let input = (0..8).map(|_|
-            (0..COL_COUNT).map(|_| ::rand::random::<bool>()).collect::<Vec<_>>()
+            ::rand::sample(&mut rng, 0..COL_COUNT, COL_COUNT/50)
         ).collect::<Vec<_>>();
 
         let mut pooler = TemporalPooler::new(

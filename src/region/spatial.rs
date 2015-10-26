@@ -1,38 +1,26 @@
-use std::ops::Range;
-
-use itertools::Itertools;
-
-use rand::Rng;
+use std::cell::Cell;
+use std::rc::Rc;
 
 use Pooling;
 use topology::Topology;
 
 struct Synapse {
     source: usize,
-    permanence: f64
+    destination: usize,
+    permanence: Cell<f64>
 }
 
 struct Column {
-    inputs: Vec<Synapse>,
+    inputs: Vec<Rc<Synapse>>,
     boost: f64,
     active_duty_cycle: f64,
     overlap_duty_cycle: f64,
 }
 
 impl Column {
-    fn new<R: Rng>(proximal_segment_size: usize, inputs: Range<usize>, mean: f64, dev: f64, rng: &mut R) -> Column {
-        use rand::distributions::{Normal, Range, Sample};
-        let mut range = Range::new(inputs.start, inputs.end);
-        let mut normal = Normal::new(mean, dev);
-        let s = (0..proximal_segment_size).map(|_| {
-            Synapse {
-                source: range.sample(rng),
-                permanence: normal.sample(rng)
-            }
-        }).collect();
-
+    fn new() -> Column {
         Column {
-            inputs: s,
+            inputs: Vec::new(),
             boost: 1.0,
             active_duty_cycle: 0.0,
             overlap_duty_cycle: 0.0
@@ -54,6 +42,7 @@ pub struct SpatialPoolerConfig {
 
 pub struct SpatialPooler<T: Topology> {
     columns: Vec<Column>,
+    inputs: Vec<Vec<Rc<Synapse>>>,
     topology: T,
     config: SpatialPoolerConfig,
     inhibition_radius: f64
@@ -64,16 +53,25 @@ pub struct SpatialPooler<T: Topology> {
  */
 
 impl<T: Topology> SpatialPooler<T> {
-    pub fn new(columns: usize, topology: T, config: SpatialPoolerConfig) -> SpatialPooler<T> {
+    pub fn new(column_count: usize, topology: T, config: SpatialPoolerConfig) -> SpatialPooler<T> {
+        use rand::distributions::{Normal, Sample};
+        let mut normal = Normal::new(config.connected_perm, config.initial_dev);
         let mut rng = ::rand::weak_rng();
+
+        let mut columns: Vec<_> = (0..column_count).map(|_| Column::new()).collect();
+        let mut inputs = vec![Vec::new(); config.input_size];
+
+        for c in 0..column_count {
+            for i in ::rand::sample(&mut rng, 0..config.input_size, config.initial_proximal_segment_size) {
+                let rc = Rc::new(Synapse { source: i, destination: c, permanence: Cell::new(normal.sample(&mut rng)) });
+                columns[c].inputs.push(rc.clone());
+                inputs[i].push(rc.clone());
+            }
+        }
+
         SpatialPooler {
-            columns: (0..columns).map(|_|
-                Column::new(config.initial_proximal_segment_size,
-                            0..config.input_size,
-                            config.connected_perm,
-                            config.initial_dev,
-                            &mut rng)
-                ).collect(),
+            columns: columns,
+            inputs: inputs,
             topology: topology,
             config: config,
             inhibition_radius: 1.0
@@ -84,19 +82,16 @@ impl<T: Topology> SpatialPooler<T> {
 /*
  * Cortical Learning impl
  */
+
 impl<T: Topology> Pooling for SpatialPooler<T> {
-    fn pool(&mut self, inputs: &[bool]) -> Vec<bool> {
-        assert!(inputs.len() == self.config.input_size,
-            "Number of inputs provided did not match number of inputs of the SpatialPooler.");
+    fn pool(&mut self, inputs: &[usize]) -> Vec<usize> {
         // phase 1: Overlaps
         let overlaps = self.cortical_spatial_phase_1(inputs);
         // phase 2: Inhibition
         self.cortical_spatial_phase_2(&overlaps)
     }
 
-    fn pool_train(&mut self, inputs: &[bool]) -> Vec<bool> {
-        assert!(inputs.len() == self.config.input_size,
-            "Number of inputs provided did not match number of inputs of the SpatialPooler.");
+    fn pool_train(&mut self, inputs: &[usize]) -> Vec<usize> {
         // phase 1: Overlaps
         let overlaps = self.cortical_spatial_phase_1(inputs);
         // phase 2: Inhibition
@@ -114,33 +109,52 @@ impl<T: Topology> Pooling for SpatialPooler<T> {
  */
 
 impl<T: Topology> SpatialPooler<T> {
-    fn cortical_spatial_phase_1(&self, inputs: &[bool]) -> Vec<f64> {
-        self.columns.iter().map( |c| {
-            let o = c.inputs.iter().map(|s|
-                if s.permanence >= self.config.connected_perm { inputs[s.source] as usize } else { 0 }
-            ).fold(0, ::std::ops::Add::add);
-            if o >= self.config.min_overlap { o as f64 * c.boost } else { 0.0 }
-        }).collect()
+
+    fn cortical_spatial_phase_1(&self, inputs: &[usize]) -> Vec<f64> {
+        let mut overlaps = vec![0f64; self.columns.len()];
+        for &i in inputs {
+            for s in &self.inputs[i] {
+                if s.permanence.get() >= self.config.connected_perm {
+                    overlaps[s.destination] += 1.;
+                }
+            }
+        }
+        let min_overlap = self.config.min_overlap as f64;
+        for (o, b) in overlaps.iter_mut().zip(self.columns.iter().map(|c| c.boost)) {
+            if *o >= min_overlap {
+                *o *= b;
+            } else {
+                *o = 0.;
+            }
+        }
+        overlaps
     }
 
-    fn cortical_spatial_phase_2(&self, overlaps: &[f64]) -> Vec<bool> {
-        overlaps.iter().enumerate().map( |(i, &o)| {
+    fn cortical_spatial_phase_2(&self, overlaps: &[f64]) -> Vec<usize> {
+        overlaps.iter().enumerate().filter_map( |(i, &o)| {
             let rank = self.topology.neighbors(i, self.inhibition_radius)
                                         .map(|j| (overlaps[j] > o) as usize).fold(0, ::std::ops::Add::add);
-            rank < self.config.desired_local_activity
+            if rank < self.config.desired_local_activity {
+                Some(i)
+            } else {
+                None
+            }
         }).collect()
     }
 
-    fn cortical_spatial_phase_3(&mut self, inputs: &[bool], overlaps: &[f64], actives: &[bool]) {
-        for c in self.columns.iter_mut().zip(actives.iter()).filter_map(|(c, &a)| if a { Some(c) } else { None }) {
-            for s in &mut c.inputs {
-                if inputs[s.source] {
-                    s.permanence += self.config.permanence_inc;
-                    if s.permanence > 1.0 { s.permanence = 1.0 }
+    fn cortical_spatial_phase_3(&mut self, inputs: &[usize], overlaps: &[f64], actives: &[usize]) {
+        for &i in actives.iter() {
+            let col = &self.columns[i];
+            for s in &col.inputs {
+                let mut p = s.permanence.get();
+                if inputs.contains(&s.source) {
+                    p += self.config.permanence_inc;
+                    if p > 1.0 { p = 1.0 }
                 } else {
-                    s.permanence -= self.config.permanence_dec;
-                    if s.permanence < 0.0 { s.permanence = 0.0 }
+                    p -= self.config.permanence_dec;
+                    if p < 0.0 { p = 0.0 }
                 }
+                s.permanence.set(p);
             }
         }
 
@@ -152,9 +166,9 @@ impl<T: Topology> SpatialPooler<T> {
         }).collect::<Vec<_>>();
 
         let alpha = self.config.sliding_average_factor;
-        for (((c, min_duty_cycle), overlap), active) in self.columns.iter_mut().zip(min_duty_cycles.into_iter()).zip(overlaps.iter()).zip(actives.iter()) {
+        for (((i, c), min_duty_cycle), overlap) in self.columns.iter_mut().enumerate().zip(min_duty_cycles.into_iter()).zip(overlaps.iter()) {
             c.active_duty_cycle *= (1.0 - alpha) * c.active_duty_cycle;
-            if *active { c.active_duty_cycle += alpha }
+            if actives.contains(&i) { c.active_duty_cycle += alpha }
             c.boost = if c.active_duty_cycle >= min_duty_cycle { 1.0 } else { min_duty_cycle / c.active_duty_cycle };
 
             c.overlap_duty_cycle *= (1.0 - alpha) * c.overlap_duty_cycle;
@@ -162,15 +176,13 @@ impl<T: Topology> SpatialPooler<T> {
             if c.overlap_duty_cycle < min_duty_cycle {
                 let factor = 1.0 + 0.1 * self.config.connected_perm;
                 for s in &mut c.inputs {
-                    s.permanence *= factor;
-                    if s.permanence > 1.0 { s.permanence = 1.0 }
+                    let mut p = s.permanence.get();
+                    p *= factor;
+                    if p > 1.0 { p = 1.0 }
+                    s.permanence.set(p);
                 }
             }
         }
-
-        self.inhibition_radius = self.columns.iter().enumerate().map(|(i, c)| {
-            self.topology.radius(i, c.inputs.iter().map(|s| s.source))
-        }).fold(0., ::std::ops::Add::add) / (self.columns.len() as f64);
     }
 }
 
@@ -181,13 +193,14 @@ mod tests {
     use topology::OneDimension;
     use Pooling;
 
-    static INPUT_SIZE: usize = 512;
-    static COL_COUNT: usize = 512;
+    static INPUT_SIZE: usize = 1024;
+    static COL_COUNT: usize = 2048;
 
     #[bench]
     fn bench_pool(b: &mut Bencher) {
+        let mut rng = ::rand::weak_rng();
         let input = (0..8).map(|_|
-            (0..INPUT_SIZE).map(|_| ::rand::random::<bool>()).collect::<Vec<_>>()
+            ::rand::sample(&mut rng, 0..INPUT_SIZE, INPUT_SIZE/50)
         ).collect::<Vec<_>>();
 
         let mut pooler = SpatialPooler::new(
@@ -213,8 +226,9 @@ mod tests {
 
     #[bench]
     fn bench_train(b: &mut Bencher) {
+        let mut rng = ::rand::weak_rng();
         let input = (0..8).map(|_|
-            (0..INPUT_SIZE).map(|_| ::rand::random::<bool>()).collect::<Vec<_>>()
+            ::rand::sample(&mut rng, 0..INPUT_SIZE, INPUT_SIZE/50)
         ).collect::<Vec<_>>();
 
         let mut pooler = SpatialPooler::new(
