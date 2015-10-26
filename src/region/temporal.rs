@@ -79,8 +79,11 @@ impl Cell {
                                    .collect::<Vec<_>>()
         } else { Vec::new() };
         let news = if new_synapses > actives.len() {
-            let potential = learnings.iter().enumerate().filter_map(|(i, &b)| if b { Some(i) } else { None }).collect::<Vec<_>>();
-            ::rand::sample(rng, potential.iter().cloned(), new_synapses - actives.len())
+            ::rand::sample(
+                rng,
+                learnings.iter().enumerate().filter_map(|(i, &b)| if b { Some(i) } else { None }),
+                new_synapses - actives.len()
+            )
         } else { Vec::new() };
 
         self.update_list.push(SegmentUpdate {

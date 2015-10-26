@@ -9,10 +9,10 @@ use htm::region::temporal::{TemporalPooler, TemporalPoolerConfig};
 use htm::region::spatial::{SpatialPooler, SpatialPoolerConfig};
 use htm::topology::OneDimension;
 
-static INPUT_SIZE: usize = 128;
-static COL_COUNT: usize = 2048;
-static DEPTH: usize = 32;
-static PERIOD: usize = 32;
+static INPUT_SIZE: usize = 32;
+static COL_COUNT: usize = 512;
+static DEPTH: usize = 8;
+static PERIOD: usize = 8;
 
 fn main() {
     let input = (0..PERIOD).map(|i|
