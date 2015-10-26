@@ -33,7 +33,7 @@ fn main() {
             permanence_dec: 0.0005,
             sliding_average_factor: 0.01,
             min_overlap: 1,
-            desired_local_activity: 10,
+            desired_local_activity: 40,
             initial_dev: 0.1,
             initial_proximal_segment_size: 16,
         }
@@ -68,7 +68,7 @@ fn main() {
     // then, skip some beats and continue !
     i = (i+4) % PERIOD;
 
-    for t in 0..400 {
+    for t in 0..1200 {
         let cols = spooler.pool_train(&input[i]);
         let out = tpooler.pool_train(&cols[..]);
         i = (i+1) % PERIOD;

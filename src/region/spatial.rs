@@ -134,7 +134,7 @@ impl<T: Topology> SpatialPooler<T> {
         overlaps.iter().enumerate().filter_map( |(i, &o)| {
             let rank = self.topology.neighbors(i, self.inhibition_radius)
                                         .map(|j| (overlaps[j] > o) as usize).fold(0, ::std::ops::Add::add);
-            if rank < self.config.desired_local_activity {
+            if rank < self.config.desired_local_activity && o > 0.0 {
                 Some(i)
             } else {
                 None
