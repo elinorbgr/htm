@@ -183,6 +183,11 @@ impl<T: Topology> SpatialPooler<T> {
                 }
             }
         }
+
+        self.inhibition_radius = self.columns.iter().enumerate().map(|(i, c)| {
+            self.topology.radius(i, c.inputs.iter().map(|s| s.source))
+        }).fold(0., ::std::ops::Add::add) / (self.columns.len() as f64);
+
     }
 }
 

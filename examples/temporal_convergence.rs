@@ -16,7 +16,11 @@ static PERIOD: usize = 8;
 
 fn main() {
     let input = (0..PERIOD).map(|i|
-        (0..INPUT_SIZE).map(|j| j*3*PERIOD + INPUT_SIZE > 3*i*INPUT_SIZE && j*3*PERIOD < (3*i+4)*INPUT_SIZE).collect::<Vec<_>>()
+        (
+            if i > 0 { (3*i-1)*INPUT_SIZE/(3*PERIOD) } else { 0 }
+            ..
+            ::std::cmp::min((3*i+4)*INPUT_SIZE/(3*PERIOD), INPUT_SIZE)
+        ).collect::<Vec<_>>()
     ).collect::<Vec<_>>();
 
     let mut spooler = SpatialPooler::new(
@@ -29,7 +33,7 @@ fn main() {
             permanence_dec: 0.0005,
             sliding_average_factor: 0.01,
             min_overlap: 1,
-            desired_local_activity: 40,
+            desired_local_activity: 10,
             initial_dev: 0.1,
             initial_proximal_segment_size: 16,
         }
