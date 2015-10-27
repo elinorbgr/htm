@@ -1,3 +1,5 @@
+//! The Transition Memory layer
+
 use std::ops::Range;
 
 use itertools::Itertools;
@@ -143,23 +145,51 @@ impl Column {
     }
 }
 
-pub struct TemporalPoolerConfig {
+/// Parameters of a TransitionMemory layer.
+pub struct TransitionMemoryConfig {
+    /// The initial permanence value of newly created synapses
+    ///
+    /// An example value would be `0.21`
     pub initial_perm: f64,
+    /// The thresold in permanence for a synapse to be considered as connected
+    ///
+    /// Between `0.0` and `1.0`, an example value would be `0.2`
     pub connected_perm: f64,
+    /// The amplitude of increase when reinforcing a synapse
+    ///
+    /// An example value would be `0.1`
     pub permanence_inc: f64,
+    /// The amplitude of decrease when weakening a synapse
+    ///
+    /// An example value would be `0.1`
     pub permanence_dec: f64,
+    /// The thresold of activation for a segment to be activated, in number of active synapses
     pub activation_thresold: usize,
+    /// The thresold of raw activity on a segment for it to be picked for learning
     pub learning_thresold: usize,
+    /// The maximum number of synapses to create when growing a segment
     pub new_synapses: usize,
+    /// The initial deviation of permanence values around connected_perm
+    ///
+    /// A typical value would be `0.1`
     pub initial_dev: f64,
+    /// The initial number of segments for each neuron
     pub initial_segment_count: usize,
+    /// The initial number of potential synapses in a segment
     pub initial_distal_segment_size: usize
 }
 
-pub struct TemporalPooler {
+/// A layer recognising temporal patterns.
+///
+/// Formerly known as Temporal Pooling, this layer is state-full, and will 
+/// link each input to the previously seen ones.
+///
+/// The output is of the same size of the input, and is the input mixed with a
+/// prediction of the next expected input.
+pub struct TransitionMemory {
     columns: Vec<Column>,
     depth: usize,
-    config: TemporalPoolerConfig,
+    config: TransitionMemoryConfig,
     last_anomaly: f64,
 }
 
@@ -167,10 +197,13 @@ pub struct TemporalPooler {
  * Preparation
  */
 
-impl TemporalPooler {
-    pub fn new(columns: usize, depth: usize, config: TemporalPoolerConfig) -> TemporalPooler {
+impl TransitionMemory {
+    /// Create a new Transition Memory
+    ///
+    /// Using given number of inputs/outputs, the given depth and given parameters.
+    pub fn new(columns: usize, depth: usize, config: TransitionMemoryConfig) -> TransitionMemory {
         let mut rng = ::rand::weak_rng();
-        TemporalPooler {
+        TransitionMemory {
             columns: (0..columns).map(|_|
                 Column::new(depth,
                             config.initial_segment_count,
@@ -191,7 +224,7 @@ impl TemporalPooler {
  * Cortical Learning impl
  */
 
-impl Pooling for TemporalPooler {
+impl Pooling for TransitionMemory {
     fn pool(&mut self, active_cols: &[usize]) -> Vec<usize> {
         let active_cells = self.dump_active_cells_and_reset();
         let predictive_cells = self.dump_predictive_cells_and_reset();
@@ -234,7 +267,7 @@ impl Pooling for TemporalPooler {
  * Temporal Pooling
  */
 
-impl TemporalPooler {
+impl TransitionMemory {
     fn dump_active_cells_and_reset(&mut self) -> Vec<bool> {
         self.columns.iter_mut().flat_map(|c| c.cells.iter_mut()).map(|c| { let a = c.active; c.active = false; a }).collect()
     }
@@ -394,7 +427,7 @@ impl TemporalPooler {
 #[cfg(all(test, feature = "nightly"))]
 mod benches {
     use test::Bencher;
-    use super::{TemporalPoolerConfig, TemporalPooler};
+    use super::{TransitionMemoryConfig, TransitionMemory};
     use Pooling;
 
     static COL_COUNT: usize = 2048;
@@ -407,10 +440,10 @@ mod benches {
             ::rand::sample(&mut rng, 0..COL_COUNT, COL_COUNT/50)
         ).collect::<Vec<_>>();
 
-        let mut pooler = TemporalPooler::new(
+        let mut pooler = TransitionMemory::new(
             COL_COUNT,
             DEPTH,
-            TemporalPoolerConfig {
+            TransitionMemoryConfig {
                 initial_perm: 0.21,
                 connected_perm: 0.2,
                 permanence_inc: 0.1,
@@ -436,10 +469,10 @@ mod benches {
             ::rand::sample(&mut rng, 0..COL_COUNT, COL_COUNT/50)
         ).collect::<Vec<_>>();
 
-        let mut pooler = TemporalPooler::new(
+        let mut pooler = TransitionMemory::new(
             COL_COUNT,
             DEPTH,
-            TemporalPoolerConfig {
+            TransitionMemoryConfig {
                 initial_perm: 0.21,
                 connected_perm: 0.2,
                 permanence_inc: 0.1,

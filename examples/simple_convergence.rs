@@ -3,8 +3,7 @@ extern crate htm;
 extern crate itertools;
 
 use htm::Pooling;
-use htm::region::temporal::{TemporalPooler, TemporalPoolerConfig};
-use htm::region::spatial::{SpatialPooler, SpatialPoolerConfig};
+use htm::cla::{TransitionMemory, TransitionMemoryConfig, PatternMemory, PatternMemoryConfig};
 use htm::topology::OneDimension;
 
 static INPUT_SIZE: usize = 32;
@@ -21,26 +20,26 @@ fn main() {
         ).collect::<Vec<_>>()
     ).collect::<Vec<_>>();
 
-    let mut spooler = SpatialPooler::new(
+    let mut spooler = PatternMemory::new(
+        INPUT_SIZE,
         COL_COUNT,
         OneDimension::new(COL_COUNT),
-        SpatialPoolerConfig {
-            input_size: INPUT_SIZE,
+        PatternMemoryConfig {
             connected_perm: 0.2,
             permanence_inc: 0.003,
             permanence_dec: 0.0005,
             sliding_average_factor: 0.01,
-            min_overlap: 1,
+            min_overlap: 4,
             desired_local_activity: 40,
             initial_dev: 0.1,
-            initial_proximal_segment_size: 16,
+            proximal_segment_size: 16,
         }
     );
 
-    let mut tpooler = TemporalPooler::new(
+    let mut tpooler = TransitionMemory::new(
         COL_COUNT,
         DEPTH,
-        TemporalPoolerConfig {
+        TransitionMemoryConfig {
             initial_perm: 0.21,
             connected_perm: 0.2,
             permanence_inc: 0.1,

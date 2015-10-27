@@ -1,3 +1,5 @@
+//! The Pattern Memory layer
+
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -28,23 +30,52 @@ impl Column {
     }
 }
 
-pub struct SpatialPoolerConfig {
-    pub input_size: usize,
+/// Parameters of a PatternMemory layer.
+pub struct PatternMemoryConfig {
+    /// The permanence threasold to count a synapse as connected
+    ///
+    /// Between `0.0` and `1.0`, an example value would be `0.2`.
     pub connected_perm: f64,
+    /// The amplitude of increase when reinforcing a synapse
+    ///
+    /// An example value would be `0.003`
     pub permanence_inc: f64,
+    /// The amplitude of decrease when weakening a synapse
+    ///
+    /// An example value would be `0.0005`
     pub permanence_dec: f64,
+    /// The weight of a new value in the exponential sliding average of activity
+    ///
+    /// An example value would be `0.01` to make it count for 1/100 of the total activity
     pub sliding_average_factor: f64,
+    /// The minimum overlap of a segment with the input pattern for it to count as activated
+    ///
+    /// An example value would be around the same order of magnitude of the expected activity of the input
     pub min_overlap: usize,
+    /// The target number of active cells in a neighborhood
+    ///
+    /// An example value would be around 2% of the number of outputs
     pub desired_local_activity: usize,
+    /// The initial deviation of permanence values around connected_perm
+    ///
+    /// A typical value would be `0.1`
     pub initial_dev: f64,
-    pub initial_proximal_segment_size: usize,
+    /// The number of potential synapses in a segment
+    ///
+    /// An example value would be around a 3 or 4 times `min_overlap`
+    pub proximal_segment_size: usize,
 }
 
-pub struct SpatialPooler<T: Topology> {
+/// A layer recognising spatial patterns.
+///
+/// Formerly known as Spatial Pooling, this layer is state-less, and can be used
+/// for spatial sampling of patterns in the input.
+pub struct PatternMemory<T: Topology> {
+    _input_size: usize,
     columns: Vec<Column>,
     inputs: Vec<Vec<Rc<Synapse>>>,
     topology: T,
-    config: SpatialPoolerConfig,
+    config: PatternMemoryConfig,
     inhibition_radius: f64
 }
 
@@ -52,25 +83,31 @@ pub struct SpatialPooler<T: Topology> {
  * Preparation
  */
 
-impl<T: Topology> SpatialPooler<T> {
-    pub fn new(column_count: usize, topology: T, config: SpatialPoolerConfig) -> SpatialPooler<T> {
+impl<T: Topology> PatternMemory<T> {
+    /// Create a new Pattern Memory
+    ///
+    /// Using given number of inputs, of outputs, the given topology and given parameters.
+    ///
+    /// The topology must be configured for the same number of indexes as the outputs count.
+    pub fn new(input_size: usize, output_size: usize, topology: T, config: PatternMemoryConfig) -> PatternMemory<T> {
         use rand::distributions::{Normal, Sample};
         let mut normal = Normal::new(config.connected_perm, config.initial_dev);
         let mut rng = ::rand::weak_rng();
 
-        let mut columns: Vec<_> = (0..column_count).map(|_| Column::new()).collect();
-        let mut inputs = vec![Vec::new(); config.input_size];
+        let mut columns: Vec<_> = (0..output_size).map(|_| Column::new()).collect();
+        let mut inputs = vec![Vec::new(); input_size];
 
-        for c in 0..column_count {
-            for i in ::rand::sample(&mut rng, 0..config.input_size, config.initial_proximal_segment_size) {
+        for c in 0..output_size {
+            for i in ::rand::sample(&mut rng, 0..input_size, config.proximal_segment_size) {
                 let rc = Rc::new(Synapse { source: i, destination: c, permanence: Cell::new(normal.sample(&mut rng)) });
                 columns[c].inputs.push(rc.clone());
                 inputs[i].push(rc.clone());
             }
         }
 
-        SpatialPooler {
+        PatternMemory {
             columns: columns,
+            _input_size: input_size,
             inputs: inputs,
             topology: topology,
             config: config,
@@ -83,7 +120,7 @@ impl<T: Topology> SpatialPooler<T> {
  * Cortical Learning impl
  */
 
-impl<T: Topology> Pooling for SpatialPooler<T> {
+impl<T: Topology> Pooling for PatternMemory<T> {
     fn pool(&mut self, inputs: &[usize]) -> Vec<usize> {
         // phase 1: Overlaps
         let overlaps = self.cortical_spatial_phase_1(inputs);
@@ -108,7 +145,7 @@ impl<T: Topology> Pooling for SpatialPooler<T> {
  * Spatial Pooling
  */
 
-impl<T: Topology> SpatialPooler<T> {
+impl<T: Topology> PatternMemory<T> {
 
     fn cortical_spatial_phase_1(&self, inputs: &[usize]) -> Vec<f64> {
         let mut overlaps = vec![0f64; self.columns.len()];
@@ -194,7 +231,7 @@ impl<T: Topology> SpatialPooler<T> {
 #[cfg(all(test, feature = "nightly"))]
 mod benches {
     use test::Bencher;
-    use super::{SpatialPoolerConfig, SpatialPooler};
+    use super::{PatternMemoryConfig, PatternMemory};
     use topology::OneDimension;
     use Pooling;
 
@@ -208,10 +245,10 @@ mod benches {
             ::rand::sample(&mut rng, 0..INPUT_SIZE, INPUT_SIZE/50)
         ).collect::<Vec<_>>();
 
-        let mut pooler = SpatialPooler::new(
+        let mut pooler = PatternMemory::new(
             COL_COUNT,
             OneDimension::new(COL_COUNT),
-            SpatialPoolerConfig {
+            PatternMemoryConfig {
                 input_size: INPUT_SIZE,
                 connected_perm: 0.2,
                 permanence_inc: 0.003,
@@ -220,7 +257,7 @@ mod benches {
                 min_overlap: 1,
                 desired_local_activity: 40,
                 initial_dev: 0.1,
-                initial_proximal_segment_size: 16,
+                proximal_segment_size: 16,
             }
         );
 
@@ -236,10 +273,10 @@ mod benches {
             ::rand::sample(&mut rng, 0..INPUT_SIZE, INPUT_SIZE/50)
         ).collect::<Vec<_>>();
 
-        let mut pooler = SpatialPooler::new(
+        let mut pooler = PatternMemory::new(
             COL_COUNT,
             OneDimension::new(COL_COUNT),
-            SpatialPoolerConfig {
+            PatternMemoryConfig {
                 input_size: INPUT_SIZE,
                 connected_perm: 0.2,
                 permanence_inc: 0.003,
@@ -248,7 +285,7 @@ mod benches {
                 min_overlap: 1,
                 desired_local_activity: 40,
                 initial_dev: 0.1,
-                initial_proximal_segment_size: 16,
+                proximal_segment_size: 16,
             }
         );
 
