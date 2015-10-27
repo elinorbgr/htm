@@ -2,8 +2,6 @@ extern crate rand;
 extern crate htm;
 extern crate itertools;
 
-use itertools::Itertools;
-
 use htm::Pooling;
 use htm::region::temporal::{TemporalPooler, TemporalPoolerConfig};
 use htm::region::spatial::{SpatialPooler, SpatialPoolerConfig};
@@ -60,7 +58,7 @@ fn main() {
 
     for t in 0..400 {
         let cols = spooler.pool_train(&input[i]);
-        let out = tpooler.pool_train(&cols[..]);
+        let _out = tpooler.pool_train(&cols[..]);
         i = (i+1) % PERIOD;
         println!("{},{:.6}", t, tpooler.anomaly());
     }
@@ -70,7 +68,7 @@ fn main() {
 
     for t in 0..1200 {
         let cols = spooler.pool_train(&input[i]);
-        let out = tpooler.pool_train(&cols[..]);
+        let _out = tpooler.pool_train(&cols[..]);
         i = (i+1) % PERIOD;
         println!("{},{:.6}", 400+t, tpooler.anomaly());
     }

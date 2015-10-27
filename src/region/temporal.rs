@@ -410,8 +410,8 @@ impl TemporalPooler {
     }
 }
 
-#[cfg(test)]
-mod tests {
+#[cfg(all(test, feature = "nightly"))]
+mod benches {
     use test::Bencher;
     use super::{TemporalPoolerConfig, TemporalPooler};
     use Pooling;

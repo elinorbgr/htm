@@ -191,8 +191,8 @@ impl<T: Topology> SpatialPooler<T> {
     }
 }
 
-#[cfg(test)]
-mod tests {
+#[cfg(all(test, feature = "nightly"))]
+mod benches {
     use test::Bencher;
     use super::{SpatialPoolerConfig, SpatialPooler};
     use topology::OneDimension;

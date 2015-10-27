@@ -6,3 +6,6 @@ authors = ["Victor Berger <victor.berger@m4x.org>"]
 [dependencies]
 rand = "0.3.11"
 itertools = "0.4.1"
+
+[features]
+nightly = []
