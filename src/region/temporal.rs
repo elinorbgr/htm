@@ -389,25 +389,6 @@ impl TemporalPooler {
             ).fold((0usize, 0usize), |(ta, tap), (a, p)| (ta + a as usize, tap + (a ^ (a&p)) as usize));
         self.last_anomaly = tot_act_pred as f64 / tot_act as f64
     }
-
-    pub fn debug(&self) {
-        let (synapses, segments) = self.columns.iter().flat_map(|c| c.cells.iter()).map(|c| {
-            (c.segments.iter().map(|s| s.synapses.len()).fold(0, ::std::ops::Add::add), c.segments.len())
-        }).fold((0, 0), |(a,b),(x,y)| (a+x, b+y));
-        println!("synapses: {}, segments: {}", synapses, segments);
-    }
-
-    pub fn string_output(&self) -> String {
-        self.columns.iter().map(|c| {
-            if c.cells.iter().any(|cell| cell.active) {
-                '+'
-            } else if c.cells.iter().any(|cell| cell.predictive) {
-                '-'
-            } else {
-                ' '
-            }
-        }).join("")
-    }
 }
 
 #[cfg(all(test, feature = "nightly"))]
