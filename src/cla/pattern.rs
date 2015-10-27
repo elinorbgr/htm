@@ -246,10 +246,10 @@ mod benches {
         ).collect::<Vec<_>>();
 
         let mut pooler = PatternMemory::new(
+            INPUT_SIZE,
             COL_COUNT,
             OneDimension::new(COL_COUNT),
             PatternMemoryConfig {
-                input_size: INPUT_SIZE,
                 connected_perm: 0.2,
                 permanence_inc: 0.003,
                 permanence_dec: 0.0005,
@@ -274,10 +274,10 @@ mod benches {
         ).collect::<Vec<_>>();
 
         let mut pooler = PatternMemory::new(
+            INPUT_SIZE,
             COL_COUNT,
             OneDimension::new(COL_COUNT),
             PatternMemoryConfig {
-                input_size: INPUT_SIZE,
                 connected_perm: 0.2,
                 permanence_inc: 0.003,
                 permanence_dec: 0.0005,
