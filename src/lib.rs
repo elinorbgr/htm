@@ -28,7 +28,7 @@ pub trait Pooling {
     ///
     /// Same inputs and outputs as `pool(...)`, but will also train the layer on this
     /// input.
-    fn pool_train(&mut self, input: &[usize]) -> Vec<usize>;
+    fn pool_train(&mut self, inputs: &[usize]) -> Vec<usize>;
 
     /// Anomaly of the last processed input.
     ///

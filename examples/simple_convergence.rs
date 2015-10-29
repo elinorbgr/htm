@@ -3,7 +3,7 @@ extern crate htm;
 extern crate itertools;
 
 use htm::Pooling;
-use htm::cla::{TransitionMemory, TransitionMemoryConfig, PatternMemory, PatternMemoryConfig};
+use htm::cla::{Region, TransitionMemoryConfig, PatternMemoryConfig};
 use htm::topology::OneDimension;
 
 static INPUT_SIZE: usize = 32;
@@ -20,9 +20,10 @@ fn main() {
         ).collect::<Vec<_>>()
     ).collect::<Vec<_>>();
 
-    let mut spooler = PatternMemory::new(
+    let mut region = Region::new(
         INPUT_SIZE,
         COL_COUNT,
+        DEPTH,
         OneDimension::new(COL_COUNT),
         PatternMemoryConfig {
             connected_perm: 0.2,
@@ -33,12 +34,7 @@ fn main() {
             desired_local_activity: 40,
             initial_dev: 0.1,
             proximal_segment_size: 16,
-        }
-    );
-
-    let mut tpooler = TransitionMemory::new(
-        COL_COUNT,
-        DEPTH,
+        },
         TransitionMemoryConfig {
             initial_perm: 0.21,
             connected_perm: 0.2,
@@ -56,19 +52,17 @@ fn main() {
     let mut i = 0;
 
     for t in 0..400 {
-        let cols = spooler.pool_train(&input[i]);
-        let _out = tpooler.pool_train(&cols[..]);
+        let _out = region.pool_train(&input[i]);
         i = (i+1) % PERIOD;
-        println!("{},{:.6}", t, tpooler.anomaly());
+        println!("{},{:.6}", t, region.anomaly());
     }
 
     // then, skip some beats and continue !
     i = (i+4) % PERIOD;
 
-    for t in 0..1200 {
-        let cols = spooler.pool_train(&input[i]);
-        let _out = tpooler.pool_train(&cols[..]);
+    for t in 0..400 {
+        let _out = region.pool_train(&input[i]);
         i = (i+1) % PERIOD;
-        println!("{},{:.6}", 400+t, tpooler.anomaly());
+        println!("{},{:.6}", 400+t, region.anomaly());
     }
 }
