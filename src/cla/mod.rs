@@ -1,4 +1,10 @@
 //! Cortical Learning Algorithm
+//!
+//! The contents of this module are primarily an implementation of the
+//! algorithm described in
+//! [Numenta's paper from 2011](http://numenta.org/resources/HTM_CorticalLearningAlgorithms.pdf).
+//! The main brick is the CLA Region, which includes both a pattern
+//! and a transition analysis.
 
 mod pattern;
 mod transition;

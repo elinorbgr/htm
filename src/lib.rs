@@ -1,3 +1,12 @@
+//! Hierarchical Temporal Memory tools
+//!
+//! This library contains tools to use HTM-based algorithms,
+//! for machine learning and anomaly detection.
+//!
+//! The main algorithm implemented here is currently the Cortical
+//! Learning Algorithm, from [Numenta](http://numenta.com/), and available in
+//! the cla module.
+
 #![warn(missing_docs)]
 
 #![cfg_attr(feature = "nightly", feature(test))]
