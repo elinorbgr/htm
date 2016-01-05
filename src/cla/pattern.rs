@@ -31,6 +31,7 @@ impl Column {
 }
 
 /// Parameters of a PatternMemory layer.
+#[derive(Copy,Clone)]
 pub struct PatternMemoryConfig {
     /// The permanence threasold to count a synapse as connected
     ///
@@ -64,6 +65,10 @@ pub struct PatternMemoryConfig {
     ///
     /// An example value would be around a 3 or 4 times `min_overlap`
     pub proximal_segment_size: usize,
+    /// The number of potential synapses in a segment
+    ///
+    /// An example value would be around a 3 or 4 times `min_overlap`
+    pub proximal_segment_density: f64,
 }
 
 /// A layer recognising spatial patterns.
@@ -77,6 +82,7 @@ pub struct PatternMemory<T: Topology> {
     topology: T,
     config: PatternMemoryConfig,
     inhibition_radius: f64
+
 }
 
 /*
@@ -97,8 +103,14 @@ impl<T: Topology> PatternMemory<T> {
         let mut columns: Vec<_> = (0..output_size).map(|_| Column::new()).collect();
         let mut inputs = vec![Vec::new(); input_size];
 
+        let radius = config.proximal_segment_size as f64 / 2.0;
+
         for c in 0..output_size {
-            for i in ::rand::sample(&mut rng, 0..input_size, config.proximal_segment_size) {
+            for i in ::rand::sample(
+                    &mut rng,
+                    topology.neighbors(c, radius),
+                    (T::surface(radius) * config.proximal_segment_density) as usize
+                ) {
                 let rc = Rc::new(Synapse { source: i, destination: c, permanence: Cell::new(normal.sample(&mut rng)) });
                 columns[c].inputs.push(rc.clone());
                 inputs[i].push(rc.clone());
@@ -111,7 +123,7 @@ impl<T: Topology> PatternMemory<T> {
             inputs: inputs,
             topology: topology,
             config: config,
-            inhibition_radius: 1.0
+            inhibition_radius: radius
         }
     }
 }
@@ -157,26 +169,32 @@ impl<T: Topology> PatternMemory<T> {
             }
         }
         let min_overlap = self.config.min_overlap as f64;
-        for (o, b) in overlaps.iter_mut().zip(self.columns.iter().map(|c| c.boost)) {
+        for ((i, o), b) in overlaps.iter_mut().enumerate().zip(self.columns.iter().map(|c| c.boost)) {
             if *o >= min_overlap {
                 *o *= b;
             } else {
-                *o = 0.;
+                *o = 0.0;
             }
         }
         overlaps
     }
 
     fn cortical_spatial_phase_2(&self, overlaps: &[f64]) -> Vec<usize> {
+        /*
         overlaps.iter().enumerate().filter_map( |(i, &o)| {
             let rank = self.topology.neighbors(i, self.inhibition_radius)
-                                        .map(|j| (overlaps[j] > o) as usize).fold(0, ::std::ops::Add::add);
-            if rank < self.config.desired_local_activity && o > 0.0 {
+                                        .map(|j| (overlaps[j] >= o) as usize).fold(0, ::std::ops::Add::add);
+            if rank < self.config.desired_local_activity && o >= 1.0 {
                 Some(i)
             } else {
                 None
             }
         }).collect()
+        */
+        use std::cmp::{PartialOrd, Ordering};
+        let mut cols: Vec<(usize,f64)> = overlaps.iter().cloned().enumerate().collect();
+        cols.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(Ordering::Less));
+        cols.into_iter().flat_map(|(i, o)| if o >= 1.0 { Some(i) } else { None }).take(self.config.desired_local_activity).collect()
     }
 
     fn cortical_spatial_phase_3(&mut self, inputs: &[usize], overlaps: &[f64], actives: &[usize]) {
@@ -221,10 +239,13 @@ impl<T: Topology> PatternMemory<T> {
             }
         }
 
-        self.inhibition_radius = self.columns.iter().enumerate().map(|(i, c)| {
-            self.topology.radius(i, c.inputs.iter().map(|s| s.source))
-        }).fold(0., ::std::ops::Add::add) / (self.columns.len() as f64);
+        let cperm = self.config.connected_perm;
 
+        self.inhibition_radius = self.columns.iter().enumerate().map(|(i, c)| {
+            self.topology.radius(i, c.inputs.iter().flat_map(
+                |s| if s.permanence.get() >= cperm { Some(s.source) } else { None }
+            ))
+        }).fold(0., ::std::ops::Add::add) / (self.columns.len() as f64);
     }
 }
 

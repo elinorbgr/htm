@@ -21,7 +21,8 @@ pub use self::transition::{TransitionMemory, TransitionMemoryConfig};
 /// input you provide it.
 pub struct Region<T: Topology> {
     pattern: PatternMemory<T>,
-    transition: TransitionMemory
+    transition: TransitionMemory,
+    last_count: usize,
 }
 
 impl<T: Topology> Region<T> {
@@ -29,19 +30,26 @@ impl<T: Topology> Region<T> {
     pub fn new(input_size: usize, columns_count: usize, depth: usize, topology: T, pattern_config: PatternMemoryConfig, transition_config: TransitionMemoryConfig) -> Region<T> {
         Region {
             pattern: PatternMemory::new(input_size, columns_count, topology, pattern_config),
-            transition: TransitionMemory::new(columns_count, depth, transition_config)
+            transition: TransitionMemory::new(columns_count, depth, transition_config),
+            last_count: 0
         }
+    }
+
+    pub fn count_synapses(&self) -> usize {
+        self.transition.count_synapses()
     }
 }
 
 impl<T: Topology> Pooling for Region<T> {
     fn pool(&mut self, inputs: &[usize]) -> Vec<usize> {
         let active_columns = self.pattern.pool(inputs);
+        self.last_count = active_columns.len();
         self.transition.pool(&active_columns)
     }
 
     fn pool_train(&mut self, inputs: &[usize]) -> Vec<usize> {
         let active_columns = self.pattern.pool_train(inputs);
+        self.last_count = active_columns.len();
         self.transition.pool_train(&active_columns)
     }
 
@@ -49,4 +57,5 @@ impl<T: Topology> Pooling for Region<T> {
         // TODO: integrate an anomaly value from the PatternMemory
         self.transition.anomaly()
     }
+
 }

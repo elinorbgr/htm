@@ -74,17 +74,26 @@ impl Cell {
         }
     }
 
-    fn add_update<R: Rng>(&mut self, index: Option<usize>, values: &[bool], learnings: &[bool], perm_thresold: f64, new_synapses: usize, sequence: bool, rng: &mut R){
-        let actives = if let Some(sindex) = index {
-            self.segments[sindex].synapses.iter().enumerate()
+    fn add_update<R: Rng>(&mut self, index: Option<usize>, values: &[bool], learnings: &[bool],
+                          perm_thresold: f64, new_synapses: usize, sequence: bool,
+                          max_sg_count: usize, max_sg_len: usize, rng: &mut R){
+        let (actives, sg_len) = if let Some(sindex) = index {
+            (self.segments[sindex].synapses.iter().enumerate()
                                    .filter_map(|(i, s)| if s.permanence >= perm_thresold && values[s.source] { Some(i) } else { None })
-                                   .collect::<Vec<_>>()
-        } else { Vec::new() };
+                                   .collect::<Vec<_>>(),
+             self.segments.len()
+            )
+        } else {
+            if self.segments.len() >= max_sg_count {
+                return;
+            }
+            (Vec::new(),0)
+        };
         let news = if new_synapses > actives.len() {
             ::rand::sample(
                 rng,
                 learnings.iter().enumerate().filter_map(|(i, &b)| if b { Some(i) } else { None }),
-                new_synapses - actives.len()
+                ::std::cmp::min(new_synapses - actives.len(), if sg_len >= max_sg_len { 0 } else { max_sg_len - sg_len })
             )
         } else { Vec::new() };
 
@@ -146,6 +155,7 @@ impl Column {
 }
 
 /// Parameters of a TransitionMemory layer.
+#[derive(Copy,Clone)]
 pub struct TransitionMemoryConfig {
     /// The initial permanence value of newly created synapses
     ///
@@ -175,8 +185,12 @@ pub struct TransitionMemoryConfig {
     pub initial_dev: f64,
     /// The initial number of segments for each neuron
     pub initial_segment_count: usize,
+    /// The maximum number of segments for each neuron
+    pub max_segment_count: usize,
     /// The initial number of potential synapses in a segment
-    pub initial_distal_segment_size: usize
+    pub initial_distal_segment_size: usize,
+    /// The maximal size of a segment
+    pub max_distal_segment_size: usize,
 }
 
 /// A layer recognising temporal patterns.
@@ -215,7 +229,7 @@ impl TransitionMemory {
                 ).collect(),
             depth: depth,
             config: config,
-            last_anomaly: 1.0
+            last_anomaly: 1.0,
         }
     }
 }
@@ -268,6 +282,10 @@ impl Pooling for TransitionMemory {
  */
 
 impl TransitionMemory {
+    pub fn count_synapses(&self) -> usize {
+        self.columns.iter().flat_map(|c| c.cells.iter()).flat_map(|c| c.segments.iter()).map(|s| s.synapses.len()).fold(0, ::std::ops::Add::add)
+    }
+
     fn dump_active_cells_and_reset(&mut self) -> Vec<bool> {
         self.columns.iter_mut().flat_map(|c| c.cells.iter_mut()).map(|c| { let a = c.active; c.active = false; a }).collect()
     }
@@ -316,6 +334,8 @@ impl TransitionMemory {
         let activation_thresold = self.config.activation_thresold;
         let learning_thresold = self.config.learning_thresold;
         let new_synapses = self.config.new_synapses;
+        let max_sg_len = self.config.max_distal_segment_size;
+        let max_sg_count = self.config.max_segment_count;
         for &coli in active_cols {
             let col = &mut self.columns[coli];
             let mut predicted = false;
@@ -360,7 +380,7 @@ impl TransitionMemory {
                         .unwrap()
                 });
                 col.cells[cindex].learning = true;
-                col.cells[cindex].add_update(opt_sindex, active_cells, learning_cells, connected_perm, new_synapses, true, rng);
+                col.cells[cindex].add_update(opt_sindex, active_cells, learning_cells, connected_perm, new_synapses, true, max_sg_count, max_sg_len, rng);
             }
         }
     }
@@ -383,6 +403,8 @@ impl TransitionMemory {
         let activation_thresold = self.config.activation_thresold;
         let new_synapses = self.config.new_synapses;
         let learning_thresold = self.config.learning_thresold;
+        let max_sg_len = self.config.max_distal_segment_size;
+        let max_sg_count = self.config.max_segment_count;
         let active_cells = self.dump_active_cells();
         for col in self.columns.iter_mut() {
         for cell in col.cells.iter_mut() {
@@ -391,14 +413,14 @@ impl TransitionMemory {
                                    .collect::<Vec<_>>();
         for si in active_segments {
                 cell.predictive = true;
-                cell.add_update(Some(si), &active_cells, training_cells, connected_perm, 0, false, rng);
+                cell.add_update(Some(si), &active_cells, training_cells, connected_perm, 0, false, max_sg_count, max_sg_len, rng);
 
                 let opt = cell.segments.iter().map(|s| s.raw_activity(&active_cells))
                                      .enumerate()
                                      .filter(|&(_, a)| a >= learning_thresold)
                                      .fold1(|(i1, a1), (i2, a2)| if a1 > a2 { (i1, a1) } else { (i2, a2) })
                                      .map(|(i, _)| i);
-                cell.add_update(opt, &active_cells, training_cells, connected_perm, new_synapses, false, rng);
+                cell.add_update(opt, &active_cells, training_cells, connected_perm, new_synapses, false, max_sg_count, max_sg_len, rng);
         }}}
     }
 
@@ -417,10 +439,10 @@ impl TransitionMemory {
     }
 
     fn update_anomaly(&mut self, previous_predictive_cells: &[bool]) {
-        let (tot_act, tot_act_pred) = self.columns.iter().map(|col| col.cells.iter().any(|c| c.active)).zip(
+        let (tot_act, tot_pred, tot_xor) = self.columns.iter().map(|col| col.cells.iter().any(|c| c.active)).zip(
                 previous_predictive_cells.iter().chunks_lazy(self.depth).into_iter().map(|mut col| col.any(|x| *x))
-            ).fold((0usize, 0usize), |(ta, tap), (a, p)| (ta + a as usize, tap + (a ^ (a&p)) as usize));
-        self.last_anomaly = tot_act_pred as f64 / tot_act as f64
+            ).fold((0usize, 0usize, 0usize), |(ta, tp, tap), (a, p)| (ta + a as usize, tp + p as usize, tap + (a ^ (a&p)) as usize));
+        self.last_anomaly = if (tot_act) > 0 { tot_xor as f64 / (tot_act ) as f64 } else { 0.0 }
     }
 }
 
@@ -453,7 +475,9 @@ mod benches {
                 new_synapses: 20,
                 initial_dev: 0.2,
                 initial_segment_count: 4,
-                initial_distal_segment_size: 20
+                initial_distal_segment_size: 20,
+                max_segment_count: 8,
+                max_distal_segment_size: 32
             }
         );
 
@@ -482,7 +506,9 @@ mod benches {
                 new_synapses: 20,
                 initial_dev: 0.2,
                 initial_segment_count: 4,
-                initial_distal_segment_size: 20
+                initial_distal_segment_size: 20,
+                max_segment_count: 8,
+                max_distal_segment_size: 32
             }
         );
 

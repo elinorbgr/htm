@@ -6,8 +6,8 @@ use htm::Pooling;
 use htm::cla::{Region, TransitionMemoryConfig, PatternMemoryConfig};
 use htm::topology::OneDimension;
 
-static INPUT_SIZE: usize = 32;
-static COL_COUNT: usize = 512;
+static INPUT_SIZE: usize = 1024;
+static COL_COUNT: usize = 1024;
 static DEPTH: usize = 8;
 static PERIOD: usize = 8;
 
@@ -27,25 +27,28 @@ fn main() {
         OneDimension::new(COL_COUNT),
         PatternMemoryConfig {
             connected_perm: 0.2,
-            permanence_inc: 0.003,
-            permanence_dec: 0.0005,
-            sliding_average_factor: 0.01,
-            min_overlap: 4,
-            desired_local_activity: 40,
+            permanence_inc: 0.1,
+            permanence_dec: 0.01,
+            sliding_average_factor: 0.001,
+            min_overlap: 5,
+            desired_local_activity: 20,
             initial_dev: 0.1,
             proximal_segment_size: 16,
+            proximal_segment_density: 0.5
         },
         TransitionMemoryConfig {
             initial_perm: 0.21,
             connected_perm: 0.2,
-            permanence_inc: 0.1,
-            permanence_dec: 0.1,
-            activation_thresold: 13,
-            learning_thresold: 10,
-            new_synapses: 20,
+            permanence_inc: 0.01,
+            permanence_dec: 0.01,
+            activation_thresold: 4,
+            learning_thresold: 5,
+            new_synapses: 8,
             initial_dev: 0.2,
             initial_segment_count: 4,
-            initial_distal_segment_size: 20
+            initial_distal_segment_size: 8,
+            max_segment_count: 8,
+            max_distal_segment_size: 16
         }
     );
 
